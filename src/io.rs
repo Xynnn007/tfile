@@ -126,10 +126,10 @@ impl MemoryIOService {
 }
 
 /// Return the IO service corresponding to the name given in parameter.
-pub fn get_io<'a>(args: &'a ORAMConfig) -> Box<dyn BaseIOService + 'a> {
-    match &args.io[..] {
-        "disk" => Box::new(DiskIOService::new()) as Box<dyn BaseIOService + 'a>,
-        "memory" => Box::new(MemoryIOService::new()) as Box<dyn BaseIOService + 'a>,
-        _ => Box::new(DiskIOService::new()) as Box<dyn BaseIOService + 'a>,
+pub fn get_io(args: String) -> Box<dyn BaseIOService> {
+    match &args[..] {
+        "disk" => Box::new(DiskIOService::new()) as Box<dyn BaseIOService>,
+        "memory" => Box::new(MemoryIOService::new()) as Box<dyn BaseIOService>,
+        _ => Box::new(DiskIOService::new()) as Box<dyn BaseIOService>,
     }
 }

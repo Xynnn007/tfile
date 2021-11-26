@@ -15,6 +15,9 @@ use oramfs::Oramfs;
 use oramfs::{start, CLISubCommand};
 use oramfs::{CLIArgs, BIG_FILE_NAME};
 
+
+#[allow(dead_code)]
+
 /// Start the ORAM in daemon or foreground mode, depending on options passed
 fn start_oram(args: &mut ORAMConfig) {
     let args_clone = args.clone();
@@ -27,15 +30,16 @@ fn start_oram(args: &mut ORAMConfig) {
 
     println!("Starting ORAM...");
     let oramfs = Oramfs::new(&args);
-
+    println!("Wow!!");
     if !args.foreground {
-        let stdout_log_path = "/tmp/oramfs.out";
-        let stderr_log_path = "/tmp/oramfs.err";
+        let stdout_log_path = "oramfs.out";
+        let stderr_log_path = "oramfs.err";
         let stdout = File::create(stdout_log_path)
             .unwrap_or_else(|_| panic!("Failed to create stdout log file: {}", stdout_log_path));
         let stderr = File::create(stderr_log_path)
             .unwrap_or_else(|_| panic!("Failed to create stderr log file: {}", stderr_log_path));
         let daemonize = Daemonize::new()
+            .pid_file("main.pid")
             .stdout(stdout)
             .stderr(stderr)
             .working_directory(".")
@@ -75,7 +79,7 @@ pub fn mount_filesystem(args: ORAMConfig) {
 
     if args.init {
         println!("Formatting EXT4 filesystem...");
-        if !Command::new("/usr/bin/mkfs.ext4")
+        if !Command::new("mkfs.ext4")
             .arg("-F")
             .arg(oram_file_path.clone())
             .status()

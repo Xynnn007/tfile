@@ -1,0 +1,43 @@
+image: rascul3/rust:latest
+
+build:
+  stage: build
+  script:
+  - cargo build
+
+doc:
+  stage: build
+  script:
+  - cargo doc
+  - mv target/doc public
+  artifacts:
+    paths:
+    - public
+
+test:
+  stage: test
+  script:
+  - cargo test
+
+cov:
+  stage: test
+  coverage: '/^Coverage+:\s(\d+(?:\.\d+)?)/'
+  script:
+  - cargo build
+  - cargo kcov
+  - COVERAGE=$(grep -Po 'covered":.*?[^\\]"' target/cov/index.json | grep "[0-9]*\.[0-9]" -o)
+  - echo "Coverage:" $COVERAGE
+  - mv target/cov public/
+  artifacts:
+    paths:
+    - public
+
+pages:
+  stage: deploy
+  script:
+  - mv index.html public/
+  artifacts:
+    paths:
+    - public
+  only:
+  - master

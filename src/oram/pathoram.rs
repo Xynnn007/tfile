@@ -614,6 +614,7 @@ mod tests {
             n: 0,
             z: 0,
             b: 0,
+            g: 0,
             init: false,
             disable_encryption,
             manual: false,

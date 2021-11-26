@@ -5,12 +5,14 @@ use bytes::Bytes;
 
 use fakeoram::FakeORAM;
 use pathoram::PathORAM;
+use toram::TORAM;
 
 use crate::io::BaseIOService;
 use crate::{get_io, ORAMConfig};
 
 pub mod fakeoram;
 pub mod pathoram;
+pub mod toram;
 
 /// Base trait for an ORAM scheme
 pub trait BaseORAM: Send {
@@ -67,7 +69,7 @@ pub struct Oramfs<'a> {
 impl<'a> Oramfs<'a> {
     /// Create a new ORAMFS
     pub fn new(args: &'a ORAMConfig) -> Self {
-        let io = get_io(&args);
+        let io = get_io(args.io.clone());
 
         let oram_size = (args.n * args.z * args.b) as u64;
         let mut oram = get_oram(args, io);
@@ -204,11 +206,12 @@ impl<'a> Oramfs<'a> {
 /// Return the ORAM corresponding to the name given in parameter.
 pub fn get_oram<'a>(
     args: &'a ORAMConfig,
-    io: Box<dyn BaseIOService + 'a>,
+    io: Box<dyn BaseIOService>,
 ) -> Box<dyn BaseORAM + 'a> {
     match &args.algorithm[..] {
-        "fakeoram" => Box::new(FakeORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
-        "pathoram" => Box::new(PathORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
+        // "fakeoram" => Box::new(FakeORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
+        // "pathoram" => Box::new(PathORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
+        "toram" => Box::new(TORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
         _ => Box::new(PathORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
     }
 }

@@ -42,6 +42,7 @@ pub struct ORAMConfig {
     pub n: i64,
     pub z: i64,
     pub b: i64,
+    pub g: i64,
     pub init: bool,
     pub disable_encryption: bool,
     pub manual: bool,
@@ -131,6 +132,7 @@ impl ORAMManager {
                 b,
                 z,
                 n,
+                g: 32,
                 io,
                 disable_encryption,
                 manual: false,
@@ -580,7 +582,7 @@ impl ORAMManager {
         args.encryption_passphrase = passphrase;
 
         // update position map
-        let io = get_io(&args);
+        let io = get_io(args.io.clone());
         let mut pathoram = PathORAM::new(&args, io);
 
         pathoram.load();

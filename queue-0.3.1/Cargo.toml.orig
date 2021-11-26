@@ -1,0 +1,19 @@
+[package]
+name = "queue"
+version = "0.3.1"
+authors = ["rascul <rascul3@gmail.com>"]
+description = "Simple wrapper around Vec to provide a FIFO queue."
+license = "MIT"
+homepage = "https://rascul.gitlab.io/queue"
+repository = "https://gitlab.com/rascul/queue"
+documentation = "https://docs.rs/queue"
+readme = "README.md"
+keywords = ["fifo", "vec", "queue"]
+categories = ["data-structures"]
+
+
+[badges]
+gitlab = { repository = "/rascul/queue", branch = "master" }
+maintenance = { status = "passively-maintained" }
+
+[dependencies]

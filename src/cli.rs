@@ -42,7 +42,7 @@ pub enum CLISubCommand {
         long = "alg",
         default_value = "pathoram",
         help = "ORAM scheme to use.",
-        possible_values = &["fakeoram", "pathoram"],
+        possible_values = &["fakeoram", "pathoram", "toram"],
         )]
         algorithm: String,
 

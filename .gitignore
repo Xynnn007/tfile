@@ -1,2 +1,7 @@
 target/
 .idea
+oramfs
+toramfs
+main.pid
+oramfs.err
+oramfs.out
