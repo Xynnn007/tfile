@@ -251,16 +251,12 @@ impl<'a> Engine<'a> {
                 loop {
                     match self.task_rc.try_recv() {
                         Err(_) => {
-                            let now = time::now();
-                            let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
-                            println!("[{:?}]: dummy" ,f_now);
-
                             self.dummy_access();
                         },
                         Ok(t) => {
                             let now = time::now();
                             let f_now = time::strftime("%Y-%m-%dT%H:%M:%S", &now).unwrap();
-                            println!("[{:?}]: true!" ,f_now);
+                            println!("[{:?}]: true access" ,f_now);
 
                             let r = self.access(&t.op, t.add.clone(), &t.data);
                             match t.op {
