@@ -71,7 +71,7 @@ impl<'a> Oramfs<'a> {
     pub fn new(args: &'a ORAMConfig) -> Self {
         let io = get_io(args.io.clone());
 
-        let oram_size = (args.n * args.z * args.b) as u64;
+        let oram_size = ((args.n + 1) / 2 * args.b) as u64;
         let mut oram = get_oram(args, io);
 
         if args.init {
@@ -90,25 +90,8 @@ impl<'a> Oramfs<'a> {
         let mut n: i64 = 255;
         let mut b: i64 = 16384;
         let mut z: i64 = 4;
-        let mut i: i64 = 0;
 
-        // allow for ORAMs as small as 1 MB
-        if oram_size < 16000000 {
-            n = 127;
-            b = 4096;
-            z = 4;
-        }
-
-        while n * b * z < oram_size {
-            if i % 3 == 0 {
-                z += 1;
-            } else if i % 3 == 1 {
-                n = (n * 2) + 1;
-            } else if i % 3 == 2 {
-                b *= 4;
-            }
-            i += 1;
-        }
+        n = 2_i64.pow((oram_size as f64 / b as f64).log2().ceil() as u32 + 1) - 1;
         (n, z, b)
     }
 
@@ -209,8 +192,8 @@ pub fn get_oram<'a>(
     io: Box<dyn BaseIOService>,
 ) -> Box<dyn BaseORAM + 'a> {
     match &args.algorithm[..] {
-        // "fakeoram" => Box::new(FakeORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
-        // "pathoram" => Box::new(PathORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
+        "fakeoram" => Box::new(FakeORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
+        "pathoram" => Box::new(PathORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
         "toram" => Box::new(TORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
         _ => Box::new(PathORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
     }

@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::path::Path;
 use std::cmp::Ordering;
-use std::sync::{Mutex, mpsc, mpsc::TryRecvError, Arc};
+use std::sync::{Mutex, mpsc::TryRecvError, Arc};
 use std::thread;
 use std::time::Duration;
+use std::fs::File;
 
 use aes::cipher::generic_array::GenericArray;
 use aes::Aes128Ctr;
@@ -22,6 +23,8 @@ use rand::{thread_rng, AsByteSliceMut, Rng};
 use serde::{Deserialize, Serialize};
 use queue::Queue;
 use hashlink::LinkedHashMap;
+use daemonize::Daemonize;
+use ipc_channel::ipc;
 
 use crate::io::BaseIOService;
 use crate::oram::toram::{layer::Layer};
@@ -158,15 +161,19 @@ impl Stash {
     }
 } 
 
+#[derive(Serialize, Deserialize)]
 pub enum Operation {
     READ,
     WRITE,
 }
 
+#[derive(Serialize, Deserialize)]
 enum OpResult {
     R(Vec<u8>),
     W(usize),
 }
+
+#[derive(Serialize, Deserialize)]
 pub struct Task {
     op: Operation, 
     add: i64, 
@@ -183,16 +190,16 @@ struct Engine<'a> {
     pub encryption_key: Vec<u8>,
     pub delta: i64,
 
-    pub task_rc: mpsc::Receiver<Task> ,
-    pub result_sc: mpsc::Sender<OpResult>
+    pub task_rc: ipc::IpcReceiver<Task> ,
+    pub result_sc: ipc::IpcSender<OpResult>
 }
 
 impl<'a> Engine<'a> {
     pub fn new(
         args: ORAMConfig, 
         io: Box<dyn BaseIOService>, 
-        task_rc: mpsc::Receiver<Task>,
-        result_sc: mpsc::Sender<OpResult>,
+        task_rc: ipc::IpcReceiver<Task>,
+        result_sc: ipc::IpcSender<OpResult>,
         height: i64
     ) -> Self {
         Self {
@@ -205,7 +212,7 @@ impl<'a> Engine<'a> {
             encryption_key: Vec::new(),
             task_rc,
             result_sc,
-            delta: 1
+            delta: 10
         }
     }
 
@@ -222,32 +229,56 @@ impl<'a> Engine<'a> {
 
     fn start_daemon(&mut self) {
         println!("Successfully started t-oram daemon...");
-        loop {
-            println!("123");
-            match &self.task_rc.try_recv() {
-                Err(e) => match e {
-                    TryRecvError::Empty => {
-                        self.dummy_access();
-                    },
-                    _ => {
-                        panic!("Closed pipeline!");
-                    }
-                },
-                Ok(t) => {
-                    let r = self.access(&t.op, &t.add, &t.data);
-                    match t.op {
-                        Operation::WRITE => {
-                            let siz = r.unwrap().len();
-                            self.result_sc.send(OpResult::W(siz));
+        let stdout_log_path = "toramfs.out";
+        let stderr_log_path = "toramfs.err";
+        let stdout = File::create(stdout_log_path)
+            .unwrap_or_else(|_| panic!("Failed to create stdout log file: {}", stdout_log_path));
+        let stderr = File::create(stderr_log_path)
+            .unwrap_or_else(|_| panic!("Failed to create stderr log file: {}", stderr_log_path));
+        let daemonize = Daemonize::new()
+            .pid_file("toram.pid")
+            .stdout(stdout)
+            .stderr(stderr)
+            .working_directory(".")
+            .exit_action(move || {
+                println!("See {} and {} as log.", stdout_log_path, stderr_log_path);
+            });
+
+        println!("Running as a daemon...");
+        match daemonize.start() {
+            Ok(_) => {
+                println!("Successfully started t-oram daemon...");
+                loop {
+                    match self.task_rc.try_recv() {
+                        Err(_) => {
+                            let now = time::now();
+                            let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
+                            println!("[{:?}]: dummy" ,f_now);
+
+                            self.dummy_access();
                         },
-                        Operation::READ => {
-                            let data = r.unwrap().to_vec();
-                            self.result_sc.send(OpResult::R(data));
+                        Ok(t) => {
+                            let now = time::now();
+                            let f_now = time::strftime("%Y-%m-%dT%H:%M:%S", &now).unwrap();
+                            println!("[{:?}]: true!" ,f_now);
+
+                            let r = self.access(&t.op, t.add.clone(), &t.data);
+                            match t.op {
+                                Operation::WRITE => {
+                                    let siz = r.unwrap().len();
+                                    self.result_sc.send(OpResult::W(siz));
+                                },
+                                Operation::READ => {
+                                    let data = r.unwrap().to_vec();
+                                    self.result_sc.send(OpResult::R(data));
+                                }
+                            }
                         }
                     }
+                    thread::sleep(Duration::from_millis(self.delta as u64));
                 }
             }
-            thread::sleep(Duration::from_millis(self.delta as u64));
+            Err(e) => eprintln!("Failed to start daemon: {}", e),
         }
     }
 
@@ -275,23 +306,24 @@ impl<'a> Engine<'a> {
     /// If it is a "write", replace data with `data_star`.
     /// Return the block's data, if op == "read".
     /// Return the block's previous data if op == "write".
-    pub fn access(&mut self, op: &Operation, add: &i64, data_str: &Option<Bytes>) -> Option<Bytes> {
+    pub fn access(&mut self, op: &Operation, add: i64, data_str: &Option<Bytes>) -> Option<Bytes> {
         // alg 1-7
-        match self.stash.pop(*add) {
+        println!("access {}", add);
+        match self.stash.pop(add) {
             Some(t) => {
                 match op {
                     Operation::WRITE => {
                         let b = data_str.as_ref().unwrap();
                         let data = Block {
-                            id: *add,
+                            id: add,
                             payload: b.clone()
                         };
-                        self.stash.push3(0, *add, data);
+                        self.stash.push3(0, add, data);
                         self.dummy_access();
                         return Some(b.clone());
                     },
                     Operation::READ => {
-                        self.stash.push3(0, *add, t.clone());
+                        self.stash.push3(0, add, t.clone());
                         self.dummy_access();
                         return Some(t.payload);
                     }
@@ -317,8 +349,8 @@ impl<'a> Engine<'a> {
             _ => {},
         }
         let res = _data.payload.clone();
-        self.stash.push3(0, *add, _data);
-        let bucket = self.dequeue(&l, &x);
+        self.stash.push3(0, add, _data);
+        let bucket = self.dequeue(l, x);
         self.write_bucket(bucket_id, bucket);
 
         Some(res)
@@ -327,13 +359,17 @@ impl<'a> Engine<'a> {
     pub fn push_down(&mut self, bucket: Vec<Block>, add: &i64) -> Option<Block> {
         let mut data = None; 
         for b in bucket {
+            if b.id == -1 {
+                continue 
+            }
+
             if b.id != *add || *add == -1 {
                 let _add = b.id;
                 let  (mut _l, mut _x) = self.position_map
                     .get(&_add)
                     .unwrap()
                     .clone();
-                _l = min(_l + 1, self.layer.height());
+                _l = min(_l + 1, self.layer.height() - 1);
                 self.position_map.insert(_add, (_l, -1));
                 self.stash.push3(_l, _add, b);
             } else {
@@ -344,14 +380,14 @@ impl<'a> Engine<'a> {
         data
     }
 
-    pub fn dequeue(&mut self, l: &i64, x: &i64) -> Vec<Block> {
+    pub fn dequeue(&mut self, l: i64, x: i64) -> Vec<Block> {
         let mut bucket: Vec<Block> = Vec::new();
         for i in 0..self.args.z {
-            if self.stash.is_empty(i) {
-                let block = self.stash.pop_layer(*l).unwrap();
-                let add = block.id.clone();
+            if !self.stash.is_empty(l) {
+                let block = self.stash.pop_layer(l).unwrap();
+                let id = block.id.clone();
                 bucket.push(block);
-                self.position_map.insert(add, (l.clone(), x.clone()));
+                self.position_map.insert(id, (l, x));
             } else {
                 bucket.push(self.get_dummy_block());
             }
@@ -382,7 +418,7 @@ impl<'a> Engine<'a> {
             } 
 
             if self.stash.len(l) > 0 {
-                let block = self.stash.pop(l).unwrap();
+                let block = self.stash.pop_layer(l).unwrap();
                 let add = block.id;
                 _bucket.push(block);
                 self.position_map.insert(add, (l.clone(),x.clone()));
@@ -512,7 +548,7 @@ impl<'a> Engine<'a> {
             }
         }
         
-        for block_id in 0..self.args.n  {
+        for block_id in 0..(self.args.n + 1)/2  {
             let (bucket_id, _) = bmap.get(&block_id).unwrap();
             let l = ((bucket_id + 1) as f64).log2().floor() as i64;
             let b = bucket_id + 1 - (1 << l) ;
@@ -553,7 +589,7 @@ impl<'a> Engine<'a> {
             let mut block_ids = Vec::new();
             for block_index in 0..self.args.z {
                 let block_id = *y.get(&block_index).unwrap();
-                match block_id.cmp(&self.args.n) {
+                match block_id.cmp(&((&self.args.n + 1) / 2)) {
                     Ordering::Less => {
                         block_ids.push(block_id);
                     },
@@ -804,11 +840,18 @@ impl<'a> Engine<'a> {
 
 pub struct TORAM<'a> {
     args: &'a ORAMConfig,
-    task_sc: mpsc::Sender<Task> ,
-    result_rc: mpsc::Receiver<OpResult>,
+    task_sc: ipc::IpcSender<Task> ,
+    result_rc: ipc::IpcReceiver<OpResult>,
 
-    handler: thread::JoinHandle<()>,
+    handler: Option<thread::JoinHandle<()>>,
     size: i64,
+}
+
+impl Drop for TORAM<'_> {
+    fn drop (&mut self) {
+        let t = self.handler.take().unwrap();
+        t.join().unwrap();
+    }
 }
 
 impl BaseORAM for TORAM<'_> {
@@ -822,7 +865,7 @@ impl BaseORAM for TORAM<'_> {
 
     fn cleanup(&mut self) {
         debug!("T-ORAM cleanup...");
-        // self.engine.save();
+        // self.handler.
         debug!("...done!");
     }
 
@@ -840,10 +883,16 @@ impl BaseORAM for TORAM<'_> {
             data: None
         };
 
+        let now = time::now();
+        let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
+        println!("[{:?}] read of {}", f_now, block_id);
+
         self.task_sc.send(t);
+        println!("send req");
         // let rc = mpsc::Receiver::
         match  self.result_rc.recv().unwrap() {
             OpResult::R(r) => {
+                println!("recvd req");
                 r
             },
             _ => panic!("Could not read block"),
@@ -857,6 +906,10 @@ impl BaseORAM for TORAM<'_> {
             add: block_id,
             data: Some(data)
         };
+
+        let now = time::now();
+        let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
+        println!("[{:?}] write of {}", f_now, block_id);
 
         self.task_sc.send(t);
         // let rc = mpsc::Receiver::
@@ -884,12 +937,11 @@ impl BaseORAM for TORAM<'_> {
 impl<'a> TORAM<'a> {
     pub fn new(args: &'a ORAMConfig, io: Box<dyn BaseIOService>) -> Self {
         let height = calc_height(args.n);
-        let (task_sc,task_rc) = mpsc::channel::<Task>();
-        let (result_sc,result_rc) = mpsc::channel::<OpResult>();
+        let (task_sc,task_rc) = ipc::channel::<Task>().unwrap();
+        let (result_sc,result_rc) = ipc::channel::<OpResult>().unwrap();
         let args2 = args.clone();
-        //let io2 = io.clone();
 
-        let handler = thread::spawn(move || {
+        let handler = Some(thread::spawn(move || {
             let mut engine = Engine::new(
                 args2,
                 io,
@@ -897,11 +949,10 @@ impl<'a> TORAM<'a> {
                 result_sc,
                 height
             );
-
             engine.setup();
-        });
+        }));
 
-        let mut toram = Self {
+        let toram = Self {
             args,
             handler,
             task_sc,

@@ -41,6 +41,7 @@ runas = "0.2.1"
 users = "0.11.0"
 queue = { path = "queue-0.3.1"}
 hashlink = { version = "0.6.0", features = ["serde_impl"] }
+ipc-channel = "0.15.0"
 
 [dev-dependencies]
 criterion = "0.3"

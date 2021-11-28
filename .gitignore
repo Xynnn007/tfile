@@ -5,3 +5,6 @@ toramfs
 main.pid
 oramfs.err
 oramfs.out
+toramfs.err
+toramfs.out
+toram.pid

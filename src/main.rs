@@ -45,7 +45,7 @@ fn start_oram(args: &mut ORAMConfig) {
             .working_directory(".")
             .exit_action(move || automount(args_clone));
 
-        println!("Running as a daemon...");
+        println!("Running fuse as a daemon...");
         match daemonize.start() {
             Ok(_) => {
                 println!("Successfully started daemon...");
