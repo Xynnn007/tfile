@@ -748,7 +748,10 @@ pub fn start(args: ORAMConfig, oramfs: Oramfs) {
     std::fs::create_dir_all(args.mountpoint.clone())
         .unwrap_or_else(|_| panic!("Failed to create mountpoint directory: {}", args.mountpoint));
 
-    let options = ["-o", "rw", "-o", "fsname=oramfs", "-o", "allow_root"]
+    let options = ["-o", "rw", 
+    "-o", "fsname=oramfs", 
+    "-o", "allow_root", 
+    "-o", "async"]
         .iter()
         .map(|o| o.as_ref())
         .collect::<Vec<&OsStr>>();

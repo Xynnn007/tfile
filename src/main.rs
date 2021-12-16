@@ -30,7 +30,6 @@ fn start_oram(args: &mut ORAMConfig) {
 
     println!("Starting ORAM...");
     let oramfs = Oramfs::new(&args);
-    println!("Wow!!");
     if !args.foreground {
         let stdout_log_path = "oramfs.out";
         let stderr_log_path = "oramfs.err";

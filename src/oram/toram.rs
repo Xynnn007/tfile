@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::path::Path;
 use std::cmp::Ordering;
-use std::sync::{Mutex, mpsc::TryRecvError, Arc};
 use std::thread;
 use std::time::Duration;
 use std::fs::File;
@@ -16,7 +15,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use chacha20::cipher::{NewStreamCipher, SyncStreamCipher};
 use chacha20::{ChaCha8, Key, Nonce};
 use ctr::cipher::{NewCipher, StreamCipher};
-use log::{debug, info};
+use log::{debug};
 use nohash_hasher::NoHashHasher;
 use rand::seq::SliceRandom;
 use rand::{thread_rng, AsByteSliceMut, Rng};
@@ -48,17 +47,6 @@ pub struct Bucket {
     version: String,
     format: String,
     blocks: Vec<Block>,
-}
-
-impl Bucket {
-    fn contains(&mut self, id: i64) -> bool {
-        for b in &self.blocks {
-            if b.id == id {
-                return true;
-            }
-        }
-        false
-    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -177,7 +165,8 @@ enum OpResult {
 pub struct Task {
     op: Operation, 
     add: i64, 
-    data: Option<Bytes>
+    data: Option<Bytes>,
+    offset: usize
 }
 
 struct Engine<'a> {
@@ -189,6 +178,7 @@ struct Engine<'a> {
     pub r: R,
     pub encryption_key: Vec<u8>,
     pub delta: i64,
+    pub c: i64,
 
     pub task_rc: ipc::IpcReceiver<Task> ,
     pub result_sc: ipc::IpcSender<OpResult>
@@ -212,18 +202,19 @@ impl<'a> Engine<'a> {
             encryption_key: Vec::new(),
             task_rc,
             result_sc,
-            delta: 10
+            delta: 10,
+            c: 3,
         }
     }
 
     pub fn setup(&mut self) {
-        info!("Initializing T-ORAM...");
+        println!("Seting up T-ORAM...");
         self.load_encryption_key();
         let rbmap = self.init_position_map();
         self.init_public_storage(rbmap);
-        info!("...initialization complete!");
+        println!("...initialization complete!");
 
-        info!("Starting daemon to handle true access...");
+        println!("Starting daemon to handle true access...");
         self.start_daemon();
     }
 
@@ -248,25 +239,35 @@ impl<'a> Engine<'a> {
         match daemonize.start() {
             Ok(_) => {
                 println!("Successfully started t-oram daemon...");
+                let mut counter = 0;
                 loop {
+                    while counter < self.c * self.layer.height() {
+                        self.dummy_access();
+                        counter += 1;
+                    }
+
                     match self.task_rc.try_recv() {
                         Err(_) => {
                             self.dummy_access();
                         },
                         Ok(t) => {
-                            let now = time::now();
-                            let f_now = time::strftime("%Y-%m-%dT%H:%M:%S", &now).unwrap();
-                            println!("[{:?}]: true access" ,f_now);
+                            counter = 0;
 
-                            let r = self.access(&t.op, t.add.clone(), &t.data);
+                            let r = self.access(&t.op, t.add.clone(), &t.data, t.offset);
                             match t.op {
                                 Operation::WRITE => {
                                     let siz = r.unwrap().len();
                                     self.result_sc.send(OpResult::W(siz));
+                                    let now = time::now();
+                                    let f_now = time::strftime("%Y-%m-%dT%H:%M:%S", &now).unwrap();
+                                    println!("[{:?}]: write req sent" ,f_now);
                                 },
                                 Operation::READ => {
                                     let data = r.unwrap().to_vec();
                                     self.result_sc.send(OpResult::R(data));
+                                    let now = time::now();
+                                    let f_now = time::strftime("%Y-%m-%dT%H:%M:%S", &now).unwrap();
+                                    println!("[{:?}]: read req sent" ,f_now);
                                 }
                             }
                         }
@@ -302,9 +303,8 @@ impl<'a> Engine<'a> {
     /// If it is a "write", replace data with `data_star`.
     /// Return the block's data, if op == "read".
     /// Return the block's previous data if op == "write".
-    pub fn access(&mut self, op: &Operation, add: i64, data_str: &Option<Bytes>) -> Option<Bytes> {
+    pub fn access(&mut self, op: &Operation, add: i64, data_str: &Option<Bytes>, offset: usize) -> Option<Bytes> {
         // alg 1-7
-        println!("access {}", add);
         match self.stash.pop(add) {
             Some(t) => {
                 match op {
@@ -334,22 +334,44 @@ impl<'a> Engine<'a> {
 
         // alg 15-16
         let bucket_id = self.get_bucket_id(&l, &x);
+        let now = time::now();
+        let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
+        println!("{:?} read bucket...", f_now);
         let blocks: Vec<Block> = self.read_bucket(bucket_id);
+        let now = time::now();
+        let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
+        println!("{:?} read bucket done", f_now);
         let mut _data = self.push_down(blocks, &add).unwrap();
 
         //alg 18-24
         match op {
             Operation::WRITE => {
-                _data.payload = data_str.as_ref().unwrap().clone();
+                let data_star = data_str.clone().unwrap();
+                let rest_start = data_star.len() + offset ;
+                let mut payload = vec![];
+                let mut left = _data.payload.as_ref()[..offset].to_owned();
+                let mut mid = data_star.bytes()[..].to_owned();
+                payload.append(&mut left);
+                payload.append(&mut mid);
+                if rest_start < self.args.b as usize {
+                    let mut right = _data.payload.as_ref()[rest_start..].to_owned();
+                    payload.append(&mut right);
+                }
+                _data.payload = bytes::Bytes::from(payload);
             },
             _ => {},
         }
         let res = _data.payload.clone();
         self.stash.push3(0, add, _data);
         let bucket = self.dequeue(l, x);
+        let now = time::now();
+        let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
+        println!("{:?} write bucket...", f_now);
         self.write_bucket(bucket_id, bucket);
-
-        Some(res)
+        let now = time::now();
+        let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
+        println!("{:?} write bucket done", f_now);
+        Some(res)  
     }
 
     pub fn push_down(&mut self, bucket: Vec<Block>, add: &i64) -> Option<Block> {
@@ -378,7 +400,7 @@ impl<'a> Engine<'a> {
 
     pub fn dequeue(&mut self, l: i64, x: i64) -> Vec<Block> {
         let mut bucket: Vec<Block> = Vec::new();
-        for i in 0..self.args.z {
+        for _ in 0..self.args.z {
             if !self.stash.is_empty(l) {
                 let block = self.stash.pop_layer(l).unwrap();
                 let id = block.id.clone();
@@ -876,19 +898,20 @@ impl BaseORAM for TORAM<'_> {
         let t = Task {
             op: Operation::READ,
             add: block_id,
-            data: None
+            data: None,
+            offset: 0,
         };
 
         let now = time::now();
         let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
-        println!("[{:?}] read of {}", f_now, block_id);
+        println!("[{:?}] send read req of {}", f_now, block_id);
 
         self.task_sc.send(t);
-        println!("send req");
-        // let rc = mpsc::Receiver::
         match  self.result_rc.recv().unwrap() {
             OpResult::R(r) => {
-                println!("recvd req");
+                let now = time::now();
+                let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
+                println!("[{:?}] receive read res {}", f_now, block_id);
                 r
             },
             _ => panic!("Could not read block"),
@@ -896,21 +919,24 @@ impl BaseORAM for TORAM<'_> {
     }
 
     /// Delegate write operations to the access() method of Path ORAM
-    fn write(&mut self, block_id: i64, data: Bytes) -> usize {
+    fn write(&mut self, block_id: i64, data: Bytes, offset: usize) -> usize {
         let t = Task {
             op: Operation::WRITE,
             add: block_id,
-            data: Some(data)
+            data: Some(data),
+            offset,
         };
 
         let now = time::now();
         let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
-        println!("[{:?}] write of {}", f_now, block_id);
+        println!("[{:?}] send write req {}", f_now, block_id);
 
         self.task_sc.send(t);
-        // let rc = mpsc::Receiver::
         match  self.result_rc.recv().unwrap() {
             OpResult::W(w) => {
+                let now = time::now();
+                let f_now = time::strftime("%Y-%m-%dT%H:%M:%S.%s", &now).unwrap();
+                println!("[{:?}] receive write res {}", f_now, block_id);
                 w
             },
             _ => panic!("Could not write block"),
@@ -932,6 +958,7 @@ impl BaseORAM for TORAM<'_> {
 
 impl<'a> TORAM<'a> {
     pub fn new(args: &'a ORAMConfig, io: Box<dyn BaseIOService>) -> Self {
+        println!("Initializing T-ORAM...");
         let height = calc_height(args.n);
         let (task_sc,task_rc) = ipc::channel::<Task>().unwrap();
         let (result_sc,result_rc) = ipc::channel::<OpResult>().unwrap();
@@ -945,6 +972,7 @@ impl<'a> TORAM<'a> {
                 result_sc,
                 height
             );
+            println!("Engine thread...");
             engine.setup();
         }));
 
@@ -956,10 +984,6 @@ impl<'a> TORAM<'a> {
 
             size: args.b * args.z * args.n,
         };
-
-        // if !args.init {
-        //     toram.engine.load();
-        // }
 
         toram
     }

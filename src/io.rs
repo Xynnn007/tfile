@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use crate::ORAMConfig;
-
 /// Base trait for an IO service
 pub trait BaseIOService: Send {
     /// Read `length` bytes from file at `path` starting at byte `offset`

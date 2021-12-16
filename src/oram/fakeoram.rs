@@ -44,7 +44,7 @@ impl BaseORAM for FakeORAM<'_> {
     /// This is simply achieved by writing at the right offset
     /// within the file that contains the target block.
     /// The position map tells us which file contains the target block.
-    fn write(&mut self, block_id: i64, data: Bytes) -> usize {
+    fn write(&mut self, block_id: i64, data: Bytes, offset: usize) -> usize {
         let bucket_id = *self
             .position_map
             .get(&block_id)

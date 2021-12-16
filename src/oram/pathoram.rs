@@ -78,7 +78,10 @@ impl BaseORAM for PathORAM<'_> {
 
     /// Delegate read operations to the access() method of Path ORAM
     fn read(&mut self, block_id: i64) -> Vec<u8> {
-        let read_bytes = self.access("read", block_id, None);
+        let now = time::now();
+        let f_now = time::strftime("%Y-%m-%dT%H:%M:%S", &now).unwrap();
+        println!("[{:?}] read {}", f_now, block_id);
+        let read_bytes = self.access("read", block_id, None, 0);
         match read_bytes {
             Some(bytes) => bytes.to_vec(),
             None => panic!("Could not read block"),
@@ -86,8 +89,11 @@ impl BaseORAM for PathORAM<'_> {
     }
 
     /// Delegate write operations to the access() method of Path ORAM
-    fn write(&mut self, block_id: i64, data: Bytes) -> usize {
-        let _ = self.access("write", block_id, Some(data.clone()));
+    fn write(&mut self, block_id: i64, data: Bytes, offset: usize) -> usize {
+        let now = time::now();
+        let f_now = time::strftime("%Y-%m-%dT%H:%M:%S", &now).unwrap();
+        println!("[{:?}] write {}", f_now, block_id);
+        let _ = self.access("write", block_id, Some(data.clone()), offset);
         data.len()
     }
 
@@ -106,6 +112,7 @@ impl BaseORAM for PathORAM<'_> {
 
 impl<'a> PathORAM<'a> {
     pub fn new(args: &'a ORAMConfig, io: Box<dyn BaseIOService + 'a>) -> Self {
+        println!("Init Path ORAM");
         let mut pathoram = Self {
             args,
             io,
@@ -155,7 +162,7 @@ impl<'a> PathORAM<'a> {
     /// If it is a "write", replace data with `data_star`.
     /// Return the block's data, if op == "read".
     /// Return the block's previous data if op == "write".
-    pub fn access(&mut self, op: &str, a: i64, data_star: Option<Bytes>) -> Option<Bytes> {
+    pub fn access(&mut self, op: &str, a: i64, data_star: Option<Bytes>, offset: usize) -> Option<Bytes> {
         let x = *self.position_map.get(&a).unwrap();
         let tree_height = self.tree.height;
 
@@ -196,11 +203,25 @@ impl<'a> PathORAM<'a> {
         if op == "write" {
             // S <- (S - {(a, data)}) U {(a, data*)}
             self.stash.retain(|b| b.id != a);
+            let data_str = data_star.unwrap();
+            let rest_start = data_str.len() + offset ;
+            let mut payload = vec![];
+            let _data = data.clone().unwrap();
+            let mut left =_data.as_ref()[..offset].to_owned();
+            let mut mid = data_str.bytes()[..].to_owned();
+            
+            payload.append(&mut left);
+            payload.append(&mut mid);
+            if rest_start < self.args.b as usize {
+                let mut right = _data.as_ref()[rest_start..].to_owned();
+                payload.append(&mut right);
+            }
+            let payload = bytes::Bytes::from(payload);
             self.stash.insert(
                 0,
                 Block {
                     id: a,
-                    payload: data_star.unwrap(),
+                    payload,
                 },
             );
         }
@@ -646,9 +667,9 @@ mod tests {
         assert_eq!(pathoram.verify_main_invariant(), true);
 
         let data = Bytes::from(vec![43; args.b as usize]);
-        let _ = pathoram.access("write", 1, Some(data.clone()));
+        let _ = pathoram.access("write", 1, Some(data.clone()), 0);
 
-        let read_bytes = pathoram.access("read", 1, None).unwrap();
+        let read_bytes = pathoram.access("read", 1, None, 0).unwrap();
 
         println!("{:?}", data);
         println!("{:?}", read_bytes);
@@ -677,9 +698,9 @@ mod tests {
         assert_eq!(pathoram.verify_main_invariant(), true);
 
         let data = Bytes::from(vec![43; args.b as usize]);
-        let _ = pathoram.access("write", 1, Some(data.clone()));
+        let _ = pathoram.access("write", 1, Some(data.clone()), 0);
 
-        let read_bytes = pathoram.access("read", 1, None).unwrap();
+        let read_bytes = pathoram.access("read", 1, None, 0).unwrap();
 
         println!("{:?}", data);
         println!("{:?}", read_bytes);

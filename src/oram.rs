@@ -3,7 +3,6 @@ use std::path::Path;
 
 use bytes::Bytes;
 
-use fakeoram::FakeORAM;
 use pathoram::PathORAM;
 use toram::TORAM;
 
@@ -34,7 +33,7 @@ pub trait BaseORAM: Send {
 
     /// Write bytes in `data` inside of block with id `block_id`.
     /// Return the number of bytes written.
-    fn write(&mut self, block_id: i64, data: Bytes) -> usize;
+    fn write(&mut self, block_id: i64, data: Bytes, offset: usize) -> usize;
 
     /// Return the total size of the ORAM
     fn size(&self) -> i64;
@@ -87,11 +86,10 @@ impl<'a> Oramfs<'a> {
 
     /// Compute practical parameters for a given ORAM size
     pub fn params_for_size(oram_size: i64) -> (i64, i64, i64) {
-        let mut n: i64 = 255;
-        let mut b: i64 = 16384;
-        let mut z: i64 = 4;
+        let b: i64 = 16384;
+        let z: i64 = 4;
 
-        n = 2_i64.pow((oram_size as f64 / b as f64).log2().ceil() as u32 + 1) - 1;
+        let n = 2_i64.pow((oram_size as f64 / b as f64).log2().ceil() as u32 + 1) - 1;
         (n, z, b)
     }
 
@@ -155,26 +153,11 @@ impl<'a> Oramfs<'a> {
         while length_copy > 0 && block_id < blocks_count {
             let end = min(offset_copy + length_copy, self.args.b);
             let length_to_write = end - offset_copy;
-
-            let block_bytes: &[u8];
-            let mut oram_bytes: Vec<u8>;
-            // read block first and replace part of it if needed
-            if offset_copy > 0 || length_to_write < self.args.b {
-                // must first read block and overwrite part of it if offset is non-zero
-                oram_bytes = self.oram.read(block_id);
-                // block_bytes[offset_copy..end] = data[0..length_to_write]
-                oram_bytes.splice(
-                    (offset_copy as usize)..(end as usize),
-                    data[0..(length_to_write as usize)].iter().cloned(),
-                );
-                block_bytes = &oram_bytes[..];
-            } else {
-                block_bytes = &data[..(self.args.b as usize)];
-            }
-
+            // from offset_copy to end
+            let block_bytes = &data[..(length_to_write as usize)];
             data = &data[(length_to_write as usize)..];
 
-            let _ = self.oram.write(block_id, Bytes::from(block_bytes.to_vec()));
+            let _ = self.oram.write(block_id, Bytes::from(block_bytes.to_vec()), offset_copy as usize);
 
             total_bytes_written += length_to_write;
             length_copy -= length_to_write;
@@ -191,8 +174,8 @@ pub fn get_oram<'a>(
     args: &'a ORAMConfig,
     io: Box<dyn BaseIOService>,
 ) -> Box<dyn BaseORAM + 'a> {
+    println!("{}", &args.algorithm[..]);
     match &args.algorithm[..] {
-        "fakeoram" => Box::new(FakeORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
         "pathoram" => Box::new(PathORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
         "toram" => Box::new(TORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
         _ => Box::new(PathORAM::new(args, io)) as Box<dyn BaseORAM + 'a>,
